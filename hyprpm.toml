@@ -1,0 +1,9 @@
+[repository]
+name = "hypr-sdr-white"
+authors = ["wilf"]
+
+[hypr-sdr-white]
+description = "SDR blending-space feedback for HDR Wayland clients"
+authors = ["wilf"]
+output = "build/libhypr-sdr-white.so"
+build = ["cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo", "cmake --build build -j 2"]
