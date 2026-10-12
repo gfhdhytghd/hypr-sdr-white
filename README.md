@@ -35,18 +35,27 @@ The plugin rejects a compositor/header commit mismatch. It hooks one C++
 function, so rebuild after any Hyprland update. Unload restores original
 feedback and notifies connected clients.
 
-Lua configuration, after the plugin has loaded:
+## Configuration
+
+The plugin supplies an independently adjustable client reference white and a feedback refresh operation.
+These are **plugin-specific interfaces**, not built-in Hyprland options.
+Keep the client's reference white equal to the desktop's SDR white and refresh feedback whenever brightness changes.
+Desktop SDR mapping stays independent: changing the plugin value does not update the monitor's `sdr_max_luminance`.
+
+After loading `hypr-sdr-white`, set its reference white to the same value as the monitor's `sdr_max_luminance` and refresh client feedback:
 
 ```lua
-hl.config({ plugin = { hypr_sdr_white = { reference_luminance = 203 } } })
+hl.config({
+    plugin = { hypr_sdr_white = { reference_luminance = 203 } },
+})
+hl.plugin.hypr_sdr_white.refresh()
 ```
 
-After changing the value, refresh existing clients without restarting them:
-
-```lua
-hl.plugin.hypr_sdr_white.refresh()
-``` It applies to all color-managed Wayland clients
-on HDR outputs, not just Chrome. Desktop SDR mapping stays independent.
+Replace `203` with your chosen SDR white level.
+Set `reference_luminance = 0` to follow each output's `sdr_max_luminance` instead of choosing an independent value.
+Run these calls only after the plugin has loaded.
+The feedback applies to all color-managed Wayland clients on HDR outputs, not just Chrome.
+Existing clients may need a restart if they retain the old description after feedback refresh.
 
 Local validation on Hyprland 0.56.2 / Chrome 154:
 
