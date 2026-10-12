@@ -22,6 +22,33 @@ protocol test observed Chromium switch to PQ after receiving this feedback.
 This is not proof of HDR video playback: test real HDR content separately.
 SDR outputs and fullscreen custom descriptions are not rewritten.
 
+## Installation with hyprpm
+
+Run these commands as your normal desktop user in the Hyprland session:
+
+```sh
+hyprpm add https://github.com/gfhdhytghd/hypr-sdr-white
+hyprpm enable hypr-sdr-white
+hyprpm reload
+```
+
+`hyprpm` builds the plugin against the running Hyprland version and requests administrator authentication when needed.
+Do not run the entire command as root or change the ownership of the hyprpm cache directory.
+If a manually loaded copy is already active, unload it before enabling the hyprpm-managed copy and remove its startup load command.
+Do not load both copies at once.
+
+Run `hyprpm reload` at login through your existing plugin startup configuration.
+Apply the configuration below only after the plugin has loaded.
+After a Hyprland upgrade, run `hyprpm update` to rebuild before loading the plugin again; compatibility with newer Hyprland APIs is not guaranteed.
+
+To disable the plugin:
+
+```sh
+hyprpm disable hypr-sdr-white
+```
+
+## Manual build for development
+
 Build with headers matching the running compositor exactly:
 
 ```sh
