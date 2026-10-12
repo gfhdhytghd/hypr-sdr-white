@@ -8,12 +8,14 @@
 #include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/protocols/core/Compositor.hpp>
 #include <hyprland/src/protocols/ColorManagement.hpp>
+#include <hyprland/src/event/EventBus.hpp>
 
-using namespace NColorManagement;
 namespace {
+using namespace NColorManagement;
 HANDLE handle = nullptr;
 CFunctionHook* preferredHook = nullptr;
 std::unique_ptr<CConfigValue<Config::INTEGER>> referenceWhite;
+CHyprSignalListener reloadListener;
 using PreferredFn = PImageDescription (*)(CWLSurfaceResource*);
 
 // Adapted from erikwb/Hyprland cc0c5094ffdee16c820162a66ce9dbeb77cdbe9e.
@@ -33,7 +35,7 @@ PImageDescription preferred(CWLSurfaceResource* surface) {
     for (const auto& monitor : State::monitorState()->monitors()) {
         if (!monitor->m_imageDescription || monitor->m_imageDescription->id() != original->id())
             continue;
-        const auto configured = referenceWhite ? **referenceWhite : 0;
+        const auto configured = **referenceWhite;
         const auto requested = configured > 0 ? configured : monitor->m_sdrMaxLuminance;
         const auto peak = std::max(1U, source.masteringLuminances.max > 0 ? source.masteringLuminances.max : source.luminances.max);
         const auto white = static_cast<uint32_t>(std::clamp<Config::INTEGER>(requested, 1, peak));
@@ -43,6 +45,7 @@ PImageDescription preferred(CWLSurfaceResource* surface) {
         result.primariesNameSet = true;
         result.primariesNamed = CM_PRIMARIES_SRGB;
         result.primaries = NColorPrimaries::BT709;
+        // Same as the original patch: SDR clients encode black at 0 nits.
         result.luminances = {.min = 0, .max = white, .reference = white};
         return CImageDescription::from(result);
     }
@@ -86,6 +89,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE pluginHandle) {
         throw std::runtime_error("hypr-sdr-white: failed to attach preferred-description hook");
     if (!HyprlandAPI::addLuaFunction(handle, "hypr_sdr_white", "refresh", refresh))
         throw std::runtime_error("hypr-sdr-white: failed to register refresh API");
+    // Config values are parsed after load and may change on reload; resend feedback each time.
+    reloadListener = Event::bus()->m_events.config.reloaded.listen([] { notifyClients(); });
     notifyClients();
     return {"hypr-sdr-white", "SDR blending-space feedback for HDR Wayland clients", "wilf", "0.2.1"};
 }
@@ -94,6 +99,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     if (preferredHook)
         preferredHook->unhook();
     preferredHook = nullptr;
+    reloadListener.reset();
     referenceWhite.reset();
     notifyClients();
 }
