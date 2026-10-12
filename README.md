@@ -22,6 +22,28 @@ protocol test observed Chromium switch to PQ after receiving this feedback.
 This is not proof of HDR video playback: test real HDR content separately.
 SDR outputs and fullscreen custom descriptions are not rewritten.
 
+### Highlight tonemapping fix
+
+Hyprland 0.56.2 decides whether to tonemap HDR content from its real peak, but
+hands the shader that peak scaled by output reference / client reference while
+leaving pixels in absolute nits. Once a client's reference white is well above
+the output's (Chrome follows the SDR white this plugin advertises), the scaled
+peak drops below the output maximum and highlights are hard-clipped instead of
+rolled off. The plugin restores the real peak for HDR content composited onto an
+HDR output; HDR-to-SDR paths are untouched.
+
+Pair it with a window rule using the `limited` curve, which keeps everything
+below a knee unchanged and only compresses highlights. The default curve dims
+SDR white, and `clamp` clips highlights:
+
+```lua
+hl.window_rule({
+    name = "chromium-hdr-limited-tonemap",
+    match = { class = "(?i)^(google-chrome.*|chromium.*|chrome-.*)$" },
+    tonemap = "limited",
+})
+```
+
 ## Installation with hyprpm
 
 Run these commands as your normal desktop user in the Hyprland session:
