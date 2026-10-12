@@ -8,14 +8,14 @@
 #include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/protocols/core/Compositor.hpp>
 #include <hyprland/src/protocols/ColorManagement.hpp>
-#include <hyprland/src/event/EventBus.hpp>
+#include <hyprland/src/config/shared/monitor/MonitorRuleManager.hpp>
 
 namespace {
 using namespace NColorManagement;
 HANDLE handle = nullptr;
 CFunctionHook* preferredHook = nullptr;
 std::unique_ptr<CConfigValue<Config::INTEGER>> referenceWhite;
-CHyprSignalListener reloadListener;
+CHyprSignalListener monitorRulesListener;
 using PreferredFn = PImageDescription (*)(CWLSurfaceResource*);
 
 // Adapted from erikwb/Hyprland cc0c5094ffdee16c820162a66ce9dbeb77cdbe9e.
@@ -72,7 +72,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE pluginHandle) {
     if (HyprlandAPI::getHyprlandVersion(handle).hash != GIT_COMMIT_HASH)
         throw std::runtime_error("hypr-sdr-white: compositor/header commit mismatch");
     if (!HyprlandAPI::addConfigValueV2(handle, makeShared<Config::Values::CIntValue>(
-            "plugin:hypr_sdr_white:reference_luminance", "Client SDR white in nits; 0 follows output SDR max", Config::INTEGER{203})))
+            "plugin:hypr_sdr_white:reference_luminance", "Client SDR white in nits; 0 follows output SDR max", Config::INTEGER{0})))
         throw std::runtime_error("hypr-sdr-white: failed to register reference white");
     referenceWhite = std::make_unique<CConfigValue<Config::INTEGER>>("plugin:hypr_sdr_white:reference_luminance");
     void* address = nullptr;
@@ -89,17 +89,18 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE pluginHandle) {
         throw std::runtime_error("hypr-sdr-white: failed to attach preferred-description hook");
     if (!HyprlandAPI::addLuaFunction(handle, "hypr_sdr_white", "refresh", refresh))
         throw std::runtime_error("hypr-sdr-white: failed to register refresh API");
-    // Config values are parsed after load and may change on reload; resend feedback each time.
-    reloadListener = Event::bus()->m_events.config.reloaded.listen([] { notifyClients(); });
+    // Fires after every monitor rule application, config reloads included. sdr_max_luminance is
+    // not part of the output description, so changing it alone never triggers preferred_changed.
+    monitorRulesListener = Config::monitorRuleMgr()->m_events.stateReloaded.listen([] { notifyClients(); });
     notifyClients();
-    return {"hypr-sdr-white", "SDR blending-space feedback for HDR Wayland clients", "wilf", "0.2.1"};
+    return {"hypr-sdr-white", "SDR blending-space feedback for HDR Wayland clients", "wilf", "0.3.0"};
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
     if (preferredHook)
         preferredHook->unhook();
     preferredHook = nullptr;
-    reloadListener.reset();
+    monitorRulesListener.reset();
     referenceWhite.reset();
     notifyClients();
 }

@@ -9,9 +9,9 @@ Experimental Hyprland 0.56.2 plugin adapting the preferred-client-description
 part of [erikwb's patch](https://github.com/erikwb/Hyprland/commit/cc0c5094ffdee16c820162a66ce9dbeb77cdbe9e).
 
 On HDR outputs, Wayland surface feedback uses sRGB primaries, gamma 2.2,
-and min/max/reference luminance 0/N/N. N is the plugin's independent
-`reference_luminance` (default 203 nits), capped
-at the output mastering peak. Set 0 to follow output `sdr_max_luminance`.
+and min/max/reference luminance 0/N/N. By default N is the output's
+`sdr_max_luminance`, the same white Hyprland uses for SDR content, capped at the
+output mastering peak.
 Physical HDR output metadata remains unchanged.
 It does not infer SDR white from EDID: existing monitor configuration is retained.
 
@@ -64,24 +64,20 @@ feedback and notifies connected clients.
 
 ## Configuration
 
-The plugin supplies an independently adjustable client reference white and a feedback refresh operation.
-These are **plugin-specific interfaces**, not built-in Hyprland options.
-Keep the client's reference white equal to the desktop's SDR white and refresh feedback whenever brightness changes.
-Desktop SDR mapping stays independent: changing the plugin value does not update the monitor's `sdr_max_luminance`.
+No configuration is needed: client SDR white follows each output's `sdr_max_luminance`.
+Changing it, through the config, a reload or `hl.monitor(...)` at runtime, resends client feedback automatically.
 
-After loading `hypr-sdr-white`, set its reference white to the same value as the monitor's `sdr_max_luminance` and refresh client feedback:
+The plugin-specific option below overrides the white with a fixed value. Leave it at 0 unless you have a reason:
+Hyprland still maps SDR-encoded clients to `sdr_max_luminance`, so a different value makes
+PQ-encoding clients (such as Chrome in HDR mode) and SDR-encoding clients disagree on white.
 
 ```lua
 hl.config({
-    plugin = { hypr_sdr_white = { reference_luminance = 203 } },
+    plugin = { hypr_sdr_white = { reference_luminance = 0 } }, -- nits; 0 follows sdr_max_luminance
 })
-hl.plugin.hypr_sdr_white.refresh()
 ```
 
-Replace `203` with your chosen SDR white level.
-Set `reference_luminance = 0` to follow each output's `sdr_max_luminance` instead of choosing an independent value.
-Run these calls only after the plugin has loaded.
-Client feedback is resent automatically after every config reload; call `refresh()` only after changing the value at runtime without a reload.
+After changing `reference_luminance` at runtime without a reload, call `hl.plugin.hypr_sdr_white.refresh()`.
 The feedback applies to all color-managed Wayland clients on HDR outputs, not just Chrome.
 Existing clients may need a restart if they retain the old description after feedback refresh.
 
