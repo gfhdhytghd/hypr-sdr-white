@@ -37,7 +37,10 @@ unchanged. No `getCMSettings` symbol lookup is performed.
 The fork still returns the output's PQ/BT.2020 description for ordinary HDR
 surface feedback; its protocol helper only substitutes an sRGB description for
 ICC outputs. The gamma 2.2 / sRGB feedback hook is therefore still needed for
-this plugin's encoding policy. See `PORT_057_REPORT.md` for source evidence.
+this plugin's encoding policy. See the fork's
+[surface description selection](https://github.com/gfhdhytghd/Hyprland/blob/f6725e43eed50eaa061aa25fe7c9f8cdc9d355e2/src/protocols/core/Compositor.cpp#L710-L735)
+and [ICC feedback fallback](https://github.com/gfhdhytghd/Hyprland/blob/f6725e43eed50eaa061aa25fe7c9f8cdc9d355e2/src/protocols/ColorManagement.cpp#L338-L343)
+for source evidence.
 
 Use the fork's window rules to select its native tonemapping behavior. This
 port has no runtime or on-screen HDR validation; the historical 0.56.2 results
