@@ -1,9 +1,11 @@
 #include <algorithm>
 #include <stdexcept>
-#include <memory>
 #include <type_traits>
+#include <hyprland/src/config/ConfigManager.hpp>
 #include <hyprland/src/config/ConfigValue.hpp>
 #include <hyprland/src/config/values/types/IntValue.hpp>
+#include <hyprland/src/debug/log/Logger.hpp>
+#include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
@@ -15,8 +17,9 @@ namespace {
 using namespace NColorManagement;
 HANDLE handle = nullptr;
 CFunctionHook* preferredHook = nullptr;
-std::unique_ptr<CConfigValue<Config::INTEGER>> referenceWhite;
+WP<Config::IConfigManager> registeredConfigManager;
 CHyprSignalListener monitorRulesListener;
+CHyprSignalListener configReloadListener;
 using PreferredFn = PImageDescription (*)(CWLSurfaceResource*);
 // The lookup matches the demangled name only, which omits the return type.
 static_assert(std::is_same_v<decltype(&CWLSurfaceResource::getPreferredImageDescription), PImageDescription (CWLSurfaceResource::*)()>);
@@ -38,7 +41,9 @@ PImageDescription preferred(CWLSurfaceResource* surface) {
     for (const auto& monitor : State::monitorState()->monitors()) {
         if (!monitor->m_imageDescription || monitor->m_imageDescription->id() != original->id())
             continue;
-        const auto configured = **referenceWhite;
+        // Do not retain a config-value cache across full-reset: the fork flushes
+        // caches before preReload can restore the plugin's value in the new manager.
+        const auto configured = *CConfigValue<Config::INTEGER>("plugin:hypr_sdr_white:reference_luminance");
         // In fork 0.57, reference_luminance anchors both HDR and SDR white.
         // Use the accessor so an unset monitor value follows the compositor's 203-nit default.
         const auto requested = configured > 0 ? configured : monitor->referenceLuminance();
@@ -80,6 +85,18 @@ int refresh(lua_State*) {
     notifyClients();
     return 0;
 }
+
+bool registerConfig() {
+    if (registeredConfigManager == Config::mgr())
+        return true;
+    if (!HyprlandAPI::addConfigValueV2(handle, makeShared<Config::Values::CIntValue>(
+            "plugin:hypr_sdr_white:reference_luminance", "Client SDR white in nits; 0 follows output reference luminance", Config::INTEGER{0})))
+        return false;
+    if (!HyprlandAPI::addLuaFunction(handle, "hypr_sdr_white", "refresh", refresh))
+        return false;
+    registeredConfigManager = Config::mgr();
+    return true;
+}
 }
 
 APICALL EXPORT std::string PLUGIN_API_VERSION() { return HYPRLAND_API_VERSION; }
@@ -88,18 +105,19 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE pluginHandle) {
     handle = pluginHandle;
     if (HyprlandAPI::getHyprlandVersion(handle).hash != GIT_COMMIT_HASH)
         throw std::runtime_error("hypr-sdr-white: compositor/header commit mismatch");
-    if (!HyprlandAPI::addConfigValueV2(handle, makeShared<Config::Values::CIntValue>(
-            "plugin:hypr_sdr_white:reference_luminance", "Client SDR white in nits; 0 follows output reference luminance", Config::INTEGER{0})))
-        throw std::runtime_error("hypr-sdr-white: failed to register reference white");
-    referenceWhite = std::make_unique<CConfigValue<Config::INTEGER>>("plugin:hypr_sdr_white:reference_luminance");
+    if (!registerConfig())
+        throw std::runtime_error("hypr-sdr-white: failed to register config and refresh API");
     void* address = findFunction("getPreferredImageDescription", "CWLSurfaceResource::getPreferredImageDescription()");
     if (!address)
         throw std::runtime_error("hypr-sdr-white: preferred-description symbol unavailable");
     preferredHook = HyprlandAPI::createFunctionHook(handle, address, reinterpret_cast<void*>(&preferred));
     if (!preferredHook || !preferredHook->hook())
         throw std::runtime_error("hypr-sdr-white: failed to attach preferred-description hook");
-    if (!HyprlandAPI::addLuaFunction(handle, "hypr_sdr_white", "refresh", refresh))
-        throw std::runtime_error("hypr-sdr-white: failed to register refresh API");
+    // Normal reload retains the manager's registrations; full-reset replaces it.
+    configReloadListener = Event::bus()->m_events.config.preReload.listen([] {
+        if (!registerConfig())
+            LOG(Log::ERR, "hypr-sdr-white: failed to restore config and refresh API");
+    });
     // Fires after every monitor rule application, config reloads included.
     // Also refresh the plugin override, which is not part of the output description.
     monitorRulesListener = Config::monitorRuleMgr()->m_events.stateReloaded.listen([] { notifyClients(); });
@@ -111,7 +129,8 @@ APICALL EXPORT void PLUGIN_EXIT() {
     if (preferredHook)
         preferredHook->unhook();
     preferredHook = nullptr;
+    configReloadListener.reset();
     monitorRulesListener.reset();
-    referenceWhite.reset();
+    registeredConfigManager.reset();
     notifyClients();
 }
