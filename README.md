@@ -1,20 +1,22 @@
 # hypr-sdr-white
 
 > [!WARNING]
-> This plugin has not been audited or reviewed. It is a temporary workaround,
-> not an official Hyprland fix or a stable, supported solution. It hooks an
-> internal compositor function and must be rebuilt and checked after upgrades.
+> This plugin is an experimental workaround, not an official Hyprland fix or a
+> stable, supported solution. It hooks internal compositor functions and must
+> be rebuilt and checked after upgrades. Physical HDR appearance is not validated.
 
-Experimental plugin for **gfhdhytghd/Hyprland fork v0.57.0**, commit
-`f6725e43eed50eaa061aa25fe7c9f8cdc9d355e2`, adapting the preferred-client-description
+The **master** branch targets the latest official **hyprwm/Hyprland release,
+v0.57.0**, commit `0aa6745f705f2c4b0a5004eb019ef76e5bbdb426`, adapting the preferred-client-description
 part of [erikwb's patch](https://github.com/erikwb/Hyprland/commit/cc0c5094ffdee16c820162a66ce9dbeb77cdbe9e).
-This branch does not target upstream hyprwm v0.57.0 (`0aa6745f`) or Hyprland 0.56.2.
+Users of the gfhdhytghd/Hyprland fork must use the **my-hyprland-master** branch
+instead. This branch does not target that fork or Hyprland 0.56.2.
 The fork and upstream release have different ABIs despite sharing a version number.
 
 On HDR outputs, Wayland surface feedback uses sRGB primaries, gamma 2.2,
 and min/max/reference luminance 0/N/N. By default N is the output's
-`reference_luminance` (203 nits when unset), the reference white the fork uses
-for both SDR and HDR content, capped at the output mastering peak.
+`sdr_max_luminance` (80 nits when unset), capped at the output mastering peak.
+Official 0.57 keeps this SDR white separate from the HDR description's
+203-nit reference; it has no monitor `reference_luminance` option.
 Physical HDR output metadata remains unchanged.
 It does not infer SDR white from EDID: existing monitor configuration is retained.
 
@@ -25,26 +27,32 @@ still infer HDR headroom from target peak versus reference white. The local
 This is not proof of HDR video playback: test real HDR content separately.
 SDR outputs and fullscreen custom descriptions are not rewritten.
 
-### Tonemapping on fork 0.57.0
+### Tonemapping on official 0.57.0
 
-The fork anchors decoded pixels and source peak to the target reference white
-using the same target/source ratio. It also uses that anchored peak to decide
-whether tonemapping is needed. The old plugin correction, which undid only the
-peak scaling, is therefore removed. This branch hooks only preferred surface
-feedback and leaves the fork's tonemapping, SDR adjustment and capture paths
-unchanged. No `getCMSettings` symbol lookup is performed.
+Official 0.57 still compares the unscaled source peak with the target peak to
+decide whether tonemapping is needed, then scales the shader's peak by
+target-reference / source-reference. The shader receives absolute-nit pixels
+without that scaling. For example, source peak/reference 1000/446 and target
+peak/reference 630/203 produce a shader peak of about 455 nits, which takes
+the shader's hard-clamp path instead of its highlight rolloff.
 
-The fork still returns the output's PQ/BT.2020 description for ordinary HDR
-surface feedback; its protocol helper only substitutes an sRGB description for
-ICC outputs. The gamma 2.2 / sRGB feedback hook is therefore still needed for
-this plugin's encoding policy. See the fork's
-[surface description selection](https://github.com/gfhdhytghd/Hyprland/blob/f6725e43eed50eaa061aa25fe7c9f8cdc9d355e2/src/protocols/core/Compositor.cpp#L710-L735)
-and [ICC feedback fallback](https://github.com/gfhdhytghd/Hyprland/blob/f6725e43eed50eaa061aa25fe7c9f8cdc9d355e2/src/protocols/ColorManagement.cpp#L338-L343)
-for source evidence.
+This branch therefore restores the `getCMSettings` hook with the official
+`CRenderContext&` argument and preserves the absolute peak for PQ, HLG and
+EXT_LINEAR sources onto HDR targets. Explicit PQ/HLG targets are covered;
+an EXT_LINEAR target must have HDR headroom. Disabled tonemapping, clamp mode
+and direct SDR-target calculations are left unchanged. Mirror/capture paths
+that consume a shared post-tonemap result can inherit the corrected result.
 
-Use the fork's window rules to select its native tonemapping behavior. This
-port has no runtime or on-screen HDR validation; the historical 0.56.2 results
-below do not establish 0.57.0 behavior.
+Source evidence at the pinned official release:
+
+- [SDR monitor option](https://github.com/hyprwm/Hyprland/blob/0aa6745f705f2c4b0a5004eb019ef76e5bbdb426/src/config/lua/bindings/LuaBindingsConfigRules.cpp#L158-L160)
+- [Surface description selection](https://github.com/hyprwm/Hyprland/blob/0aa6745f705f2c4b0a5004eb019ef76e5bbdb426/src/protocols/core/Compositor.cpp#L710-L732)
+- [CM settings and peak scaling](https://github.com/hyprwm/Hyprland/blob/0aa6745f705f2c4b0a5004eb019ef76e5bbdb426/src/render/Renderer.cpp#L2138-L2207)
+- [Pixel conversion before tonemapping](https://github.com/hyprwm/Hyprland/blob/0aa6745f705f2c4b0a5004eb019ef76e5bbdb426/src/render/shaders/glsl/cm_helpers.glsl#L234-L249)
+
+Use Hyprland's window rules to select tonemapping behavior. Nested lifecycle
+and numerical settings checks do not validate on-screen HDR appearance.
+The historical 0.56.2 client results below do not establish 0.57.0 behavior.
 
 ## Installation with hyprpm
 
@@ -82,28 +90,31 @@ hyprctl plugin load "$PWD/build/libhypr-sdr-white.so"
 hyprctl plugin unload "$PWD/build/libhypr-sdr-white.so"
 ```
 
-The plugin rejects a compositor/header commit mismatch. It hooks one C++
-function, so rebuild after any Hyprland update. Unload restores original
-feedback and notifies connected clients.
+The plugin rejects a compositor/header commit mismatch. It hooks two C++
+functions with compile-time signature checks, so rebuild after any Hyprland
+update. Unload restores original feedback and tonemapping settings and
+notifies connected clients. The Lua refresh API and plugin option are restored
+after `hyprctl reload full-reset` and remain available after ordinary reloads.
 
 ## Configuration
 
 No plugin configuration is needed: advertised client SDR white follows each
-output's `reference_luminance`, capped at its mastering peak.
+output's `sdr_max_luminance`, capped at its mastering peak.
 Changing it, through the config, a reload or `hl.monitor(...)` at runtime, resends client feedback automatically.
 
 The plugin-specific option below overrides the white with a fixed value. Leave it at 0 unless you have a reason:
 The override changes advertised client encoding white only; it does not change
-the output reference white. The fork still anchors incoming content to the
-output's `reference_luminance`. Change the monitor option to change output white.
+the monitor's SDR conversion settings or its HDR description's reference.
+Change the monitor's `sdr_max_luminance` option to change compositor SDR white.
 
 ```lua
 hl.config({
-    plugin = { hypr_sdr_white = { reference_luminance = 0 } }, -- nits; 0 follows monitor reference_luminance
+    plugin = { hypr_sdr_white = { reference_luminance = 0 } }, -- nits; 0 follows monitor sdr_max_luminance
 })
 ```
 
-After changing `reference_luminance` at runtime without a reload, call `hl.plugin.hypr_sdr_white.refresh()`.
+After changing the plugin's `reference_luminance` override at runtime without
+a reload, call `hl.plugin.hypr_sdr_white.refresh()`.
 The feedback applies to all color-managed Wayland clients on HDR outputs, not just Chrome.
 Existing clients may need a restart if they retain the old description after feedback refresh.
 
