@@ -1,15 +1,19 @@
 #include <algorithm>
 #include <stdexcept>
 #include <type_traits>
+#include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/config/ConfigManager.hpp>
 #include <hyprland/src/config/ConfigValue.hpp>
 #include <hyprland/src/config/values/types/IntValue.hpp>
 #include <hyprland/src/debug/log/Logger.hpp>
+#include <hyprland/src/desktop/view/window/Window.hpp>
+#include <hyprland/src/desktop/view/window/WindowMetadata.hpp>
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/protocols/core/Compositor.hpp>
+#include <hyprland/src/protocols/core/Subcompositor.hpp>
 #include <hyprland/src/protocols/ColorManagement.hpp>
 #include <hyprland/src/config/shared/monitor/MonitorRuleManager.hpp>
 #include <hyprland/src/render/Renderer.hpp>
@@ -32,6 +36,11 @@ static_assert(std::is_same_v<decltype(&Render::IHyprRenderer::getCMSettings),
 // Adapted from erikwb/Hyprland cc0c5094ffdee16c820162a66ce9dbeb77cdbe9e.
 // Change client feedback only: the physical output's PQ description is untouched.
 PImageDescription preferred(CWLSurfaceResource* surface) {
+    // The native surface method assumes both a live self pointer and a role.
+    auto parent = surface ? surface->m_self.lock() : nullptr;
+    if (!parent || !parent->m_role)
+        return g_pCompositor->getPreferredImageDescription();
+
     const auto original = reinterpret_cast<PreferredFn>(preferredHook->m_original)(surface);
     if (!original)
         return original;
@@ -41,31 +50,49 @@ PImageDescription preferred(CWLSurfaceResource* surface) {
                      source.transferFunction == CM_TRANSFER_FUNCTION_EXT_LINEAR;
     if (!hdr || source.icc.present)
         return original;
-    // Only rewrite descriptions belonging to a physical output. Fullscreen
-    // passthrough and other custom descriptions keep the compositor's decision.
-    for (const auto& monitor : State::monitorState()->monitors()) {
-        if (!monitor->m_imageDescription || monitor->m_imageDescription->id() != original->id())
-            continue;
-        // Do not retain a config-value cache across full-reset: Hyprland flushes
-        // caches before preReload can restore the plugin's value in the new manager.
-        const auto configured = *CConfigValue<Config::INTEGER>("plugin:hypr_sdr_white:reference_luminance");
-        // Official 0.57 keeps SDR white separate from the HDR description's 203-nit reference.
-        // Match getTFMaxLuminance's 80-nit fallback for a negative monitor value.
-        const auto sdrWhite = monitor->m_sdrMaxLuminance >= 0 ? monitor->m_sdrMaxLuminance : static_cast<int>(SDR_MAX_LUMINANCE);
-        const auto requested = configured > 0 ? configured : sdrWhite;
-        const auto peak = std::max(1U, source.masteringLuminances.max > 0 ? source.masteringLuminances.max : source.luminances.max);
-        const auto white = static_cast<uint32_t>(std::clamp<Config::INTEGER>(requested, 1, peak));
-        auto result = source;
-        result.transferFunction = CM_TRANSFER_FUNCTION_GAMMA22;
-        result.transferFunctionPower = 1.0f;
-        result.primariesNameSet = true;
-        result.primariesNamed = CM_PRIMARIES_SRGB;
-        result.primaries = NColorPrimaries::BT709;
-        // Same as the original patch: SDR clients encode black at 0 nits.
-        result.luminances = SImageDescription::SPCLuminances{.min = 0.0f, .max = white, .reference = white};
-        return CImageDescription::from(result);
+    const auto window = surface->m_hlSurface ? Desktop::View::CWindow::fromView(surface->m_hlSurface->view()) : nullptr;
+    const auto preferHDR = *CConfigValue<Config::INTEGER>("quirks:prefer_hdr");
+    if (preferHDR == 1 || (preferHDR == 2 && window && window->metadata().appID() == "gamescope"))
+        return original;
+
+    // Follow CWLSurfaceResource's output selection. Identical image descriptions
+    // can share an ID even when their outputs have different SDR white points.
+    if (parent->m_role->role() == SURFACE_ROLE_SUBSURFACE) {
+        const auto subsurface = static_cast<CSubsurfaceRole*>(parent->m_role.get())->m_subsurface.lock();
+        parent = subsurface ? subsurface->t1Parent() : nullptr;
+        if (!parent)
+            return original;
     }
-    return original;
+    PHLMONITOR monitor;
+    if (parent->m_enteredOutputs.size() == 1)
+        monitor = parent->m_enteredOutputs[0].lock();
+    else if (window)
+        monitor = window->m_monitor.lock();
+
+    const bool usesCompositorFallback = !monitor;
+    if (usesCompositorFallback && PROTO::colorManagement && State::monitorState()->monitors().size() == 1)
+        monitor = State::monitorState()->monitors()[0];
+
+    if (!monitor || !monitor->m_imageDescription || monitor->m_imageDescription->id() != original->id() ||
+        (!usesCompositorFallback && monitor->getAutoHDRImageDescription(parent).has_value()))
+        return original;
+
+    // Do not retain the plugin config value across full-reset.
+    const auto configured = *CConfigValue<Config::INTEGER>("plugin:hypr_sdr_white:reference_luminance");
+    // Official 0.57 keeps SDR white separate from the HDR description's 203-nit reference.
+    const auto sdrWhite = monitor->m_sdrMaxLuminance >= 0 ? monitor->m_sdrMaxLuminance : static_cast<int>(SDR_MAX_LUMINANCE);
+    const auto requested = configured > 0 ? configured : sdrWhite;
+    const auto peak = std::max(1U, source.masteringLuminances.max > 0 ? source.masteringLuminances.max : source.luminances.max);
+    const auto white = static_cast<uint32_t>(std::clamp<Config::INTEGER>(requested, 1, peak));
+    auto result = source;
+    result.transferFunction = CM_TRANSFER_FUNCTION_GAMMA22;
+    result.transferFunctionPower = 1.0f;
+    result.primariesNameSet = true;
+    result.primariesNamed = CM_PRIMARIES_SRGB;
+    result.primaries = NColorPrimaries::BT709;
+    // Same as the original patch: SDR clients encode black at 0 nits.
+    result.luminances = SImageDescription::SPCLuminances{.min = 0.0f, .max = white, .reference = white};
+    return CImageDescription::from(result);
 }
 
 bool isHDR(eTransferFunction tf) {
@@ -75,8 +102,10 @@ bool isHDR(eTransferFunction tf) {
 // Official 0.57 scales the peak by dstRef/srcRef but feeds absolute-nit pixels
 // to tonemap. Restore the absolute peak, including when the original used its cache.
 Render::SCMSettings cmSettings(Render::IHyprRenderer* renderer, Render::CRenderContext& ctx, PImageDescription source, PImageDescription target,
-                               SP<CWLSurfaceResource> surface, bool modifySDR, float sdrMinLuminance, int sdrMaxLuminance, bool shouldUseSurface) {
-    auto settings = reinterpret_cast<CMSettingsFn>(cmSettingsHook->m_original)(renderer, ctx, source, target, surface, modifySDR, sdrMinLuminance, sdrMaxLuminance,
+                               SP<CWLSurfaceResource>, bool modifySDR, float sdrMinLuminance, int sdrMaxLuminance, bool shouldUseSurface) {
+    // v0.57.2 reads the surface from ctx. Optimized callers can pass storage
+    // with no initialized smart pointer for the unused by-value argument.
+    auto settings = reinterpret_cast<CMSettingsFn>(cmSettingsHook->m_original)(renderer, ctx, source, target, nullptr, modifySDR, sdrMinLuminance, sdrMaxLuminance,
                                                                               shouldUseSurface);
     // EXT_LINEAR can describe an SDR work buffer; require HDR headroom only for
     // that ambiguous target. Explicit PQ/HLG targets need no headroom heuristic.

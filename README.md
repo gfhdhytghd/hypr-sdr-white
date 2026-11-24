@@ -64,6 +64,12 @@ hyprpm enable hypr-sdr-white
 hyprpm reload
 ```
 
+On the gfhdhytghd/Hyprland fork, use the same commands with this `add` command:
+
+```sh
+hyprpm add https://github.com/gfhdhytghd/hypr-sdr-white origin/my-hyprland-master
+```
+
 `hyprpm` builds the plugin against the running Hyprland version and requests administrator authentication when needed.
 Do not run the entire command as root or change the ownership of the hyprpm cache directory.
 If a manually loaded copy is already active, unload it before enabling the hyprpm-managed copy and remove its startup load command.
