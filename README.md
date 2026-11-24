@@ -51,7 +51,7 @@ below do not establish 0.57.0 behavior.
 Run these commands as your normal desktop user in the Hyprland session:
 
 ```sh
-hyprpm add https://github.com/gfhdhytghd/hypr-sdr-white
+hyprpm add https://github.com/gfhdhytghd/hypr-sdr-white origin/my-hyprland-master
 hyprpm enable hypr-sdr-white
 hyprpm reload
 ```
